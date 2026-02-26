@@ -84,6 +84,7 @@ services:
     container_name: crypto_producer
     environment:
       # IMPORTANTE: Usamos el puerto interno (29092) porque estamos dentro de la red Docker
-      - KAFKA_BROKER=kafka:29092 
+      - KAFKA_BROKER=kafka:29092
+      - API_KEY=${CMC_API_KEY}
     depends_on:
       - kafka
