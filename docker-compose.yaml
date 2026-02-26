@@ -1,0 +1,89 @@
+version: "3.9"
+
+services:
+# SERVICIO 1: Entorno de Desarrollo (Spark + Jupyter)
+  jupyter:
+    image: jupyter/all-spark-notebook:spark-3.5.0
+    container_name: pyspark_lab
+    ports:
+      - "8888:8888" # Acceso al Jupyter Lab
+      - "4040:4040" # Acceso a la UI de Spark (para ver jobs) 
+    volumes:
+      - ./workspace:/home/jovyan/work
+      - ./kafka-producer:/home/jovyan/kafka_producer
+    environment:
+    # Pasamos las credenciales al entorno de Spark para usarlas en el código Python
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - PYSPARK_SUBMIT_ARGS=--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.6.0 pyspark-shell
+    depends_on:
+      - kafka
+      - postgres
+
+# SERVICIO 2: Coordinador de Kafka (Zookeeper + Kafka)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+# SERVICIO 3: Broker de Mensajería (Kafka)
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka
+    ports:
+      - "9092:9092" # Acceso al broker de Kafka (solo si quieres acceder desde fuera del contenedor)
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Configuración para que Kafka sea accesible desde otros contenedores (como Jupyter kafka:29092) y desde fuera del contenedor (localhost:9092)
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT, PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+# SERVICIO 4: Visualizador de Kafka (Kafka UI)
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    depends_on:
+      - kafka
+      # --- CAPA ALMACENAMIENTO
+  postgres:
+    image: postgres:15
+    container_name: postgres_db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${DB_USER}       # Lee del .env
+      POSTGRES_PASSWORD: ${DB_PASSWORD} # Lee del .env
+      POSTGRES_DB: ${DB_NAME}         # Lee del .env
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+
+  # --- CAPA VISUALIZACIÓN 
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD} # Lee del .env
+    depends_on:
+      - postgres
+
+  # SERVICIO Productor (el Worker de Python)
+  crypto-producer:
+    build: 
+      context: ./kafka-producer # Busca la carpeta kafka-producer en el proyecto y usa su Dockerfile
+    container_name: crypto_producer
+    environment:
+      # IMPORTANTE: Usamos el puerto interno (29092) porque estamos dentro de la red Docker
+      - KAFKA_BROKER=kafka:29092 
+    depends_on:
+      - kafka
